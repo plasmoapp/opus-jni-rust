@@ -1,6 +1,7 @@
 use jni::objects::{JByteArray, JClass, JObject, JShortArray, JValue};
-use jni::{JNIEnv};
-use jni::sys::{jboolean, jint, jlong, jsize};
+use jni::{jni_sig, jni_str, Env, EnvUnowned};
+use jni::errors::ThrowRuntimeExAndDefault;
+use jni::sys::{jboolean, jint, jlong};
 use opus::{Channels, Decoder};
 use crate::decoder_container::DecoderContainer;
 use crate::util::exception::{JavaException, JavaExceptions};
@@ -8,65 +9,43 @@ use crate::util::into_exception::ErrIntoException;
 use crate::util::pointer::{get_pointer_from_field, JavaPointers};
 
 #[no_mangle]
-pub extern "system" fn Java_com_plasmoverse_opus_OpusDecoder_createNative(
-    mut env: JNIEnv,
-    _class: JClass,
+pub extern "system" fn Java_com_plasmoverse_opus_OpusDecoder_createNative<'local>(
+    mut env: EnvUnowned<'local>,
+    _class: JClass<'local>,
     sample_rate: jint,
     stereo: jboolean,
     frame_size: jint
 ) -> jlong {
-    match create_decoder(sample_rate, stereo, frame_size) {
-        Ok(pointer) => pointer,
-        Err(exception) => {
-            env.throw_new_exception(exception);
-            0
-        }
-    }
+    env.with_env(|env| create_decoder(sample_rate, stereo, frame_size).or_throw(env))
+        .resolve::<ThrowRuntimeExAndDefault>()
 }
 
 #[no_mangle]
-pub unsafe extern "system" fn Java_com_plasmoverse_opus_OpusDecoder_resetNative(
-    mut env: JNIEnv,
-    decoder: JObject
+pub extern "system" fn Java_com_plasmoverse_opus_OpusDecoder_resetNative<'local>(
+    mut env: EnvUnowned<'local>,
+    decoder: JObject<'local>
 ) {
-    match decoder_reset(&mut env, decoder) {
-        Ok(pointer) => pointer,
-        Err(exception) => {
-            env.throw_new_exception(exception);
-        }
-    }
+    env.with_env(|env| decoder_reset(env, decoder).or_throw(env))
+        .resolve::<ThrowRuntimeExAndDefault>()
 }
 
 #[no_mangle]
-pub unsafe extern "system" fn Java_com_plasmoverse_opus_OpusDecoder_closeNative(
-    mut env: JNIEnv,
-    decoder: JObject
+pub extern "system" fn Java_com_plasmoverse_opus_OpusDecoder_closeNative<'local>(
+    mut env: EnvUnowned<'local>,
+    decoder: JObject<'local>
 ) {
-    match decoder_close(&mut env, decoder) {
-        Ok(pointer) => pointer,
-        Err(exception) => {
-            env.throw_new_exception(exception);
-        }
-    }
+    env.with_env(|env| decoder_close(env, decoder).or_throw(env))
+        .resolve::<ThrowRuntimeExAndDefault>()
 }
 
 #[no_mangle]
-pub unsafe extern "system" fn Java_com_plasmoverse_opus_OpusDecoder_decodeNative<'local>(
-    mut env: JNIEnv<'local>,
+pub extern "system" fn Java_com_plasmoverse_opus_OpusDecoder_decodeNative<'local>(
+    mut env: EnvUnowned<'local>,
     decoder: JObject<'local>,
     encoded: JByteArray<'local>
 ) -> JShortArray<'local> {
-    match decoder_decode(&mut env, decoder, encoded) {
-        Ok(decoded) => decoded,
-        Err(exception) => {
-            let result = env.new_short_array(0)
-                .expect("Couldn't create java short array");
-
-            env.throw_new_exception(exception);
-
-            result
-        }
-    }
+    env.with_env(|env| decoder_decode(env, decoder, encoded).or_throw(env))
+        .resolve::<ThrowRuntimeExAndDefault>()
 }
 
 
@@ -75,10 +54,7 @@ fn create_decoder(
     stereo: jboolean,
     frame_size: jint
 ) -> Result<jlong, JavaException> {
-    let channels = match stereo {
-        1u8 => Channels::Stereo,
-        _ => Channels::Mono
-    };
+    let channels = if stereo { Channels::Stereo } else { Channels::Mono };
 
     let decoder = Decoder::new(sample_rate as u32, channels)
         .err_into_opus_exception("Failed to create decoder".into())?;
@@ -92,18 +68,18 @@ fn create_decoder(
     Ok(decoder_container.into_jlong_pointer())
 }
 
-unsafe fn get_decoder_container<'local>(
-    env: &mut JNIEnv,
+fn get_decoder_container<'a>(
+    env: &mut Env,
     decoder: &JObject
-) -> Result<&'local mut DecoderContainer, JavaException> {
-    let pointer = get_pointer_from_field(env, decoder, "pointer".into())
+) -> Result<&'a mut DecoderContainer, JavaException> {
+    let pointer = get_pointer_from_field(env, decoder)
         .err_into_opus_exception("Failed to get a pointer from the java object".into())?;
 
-    Ok(DecoderContainer::from_jlong_pointer(pointer))
+    Ok(unsafe { DecoderContainer::from_jlong_pointer(pointer) })
 }
 
-unsafe fn decoder_reset(
-    env: &mut JNIEnv,
+fn decoder_reset(
+    env: &mut Env,
     decoder: JObject
 ) -> Result<(), JavaException> {
     let container = get_decoder_container(env, &decoder)?;
@@ -114,22 +90,22 @@ unsafe fn decoder_reset(
     Ok(())
 }
 
-unsafe fn decoder_close(
-    env: &mut JNIEnv,
+fn decoder_close(
+    env: &mut Env,
     decoder: JObject
 ) -> Result<(), JavaException> {
-    let pointer = get_pointer_from_field(env, &decoder, "pointer".into())
+    let pointer = get_pointer_from_field(env, &decoder)
         .err_into_opus_exception("Failed to get a pointer from the java object".into())?;
 
-    let _container = Box::from_raw(pointer as *mut DecoderContainer);
-    env.set_field(&decoder, "pointer", "J", JValue::from(0 as jlong))
+    let _container = unsafe { Box::from_raw(pointer as *mut DecoderContainer) };
+    env.set_field(&decoder, jni_str!("pointer"), jni_sig!("J"), JValue::from(0 as jlong))
         .err_into_opus_exception("Failed set reset pointer".into())?;
 
     Ok(())
 }
 
-unsafe fn decoder_decode<'local>(
-    env: &mut JNIEnv<'local>,
+fn decoder_decode<'local>(
+    env: &mut Env<'local>,
     decoder: JObject<'local>,
     encoded: JByteArray<'local>
 ) -> Result<JShortArray<'local>, JavaException> {
@@ -149,10 +125,10 @@ unsafe fn decoder_decode<'local>(
     let result_length = result * container.channels as usize;
     decoded.truncate(result_length);
 
-    let decoded_java = env.new_short_array(result_length as jsize)
+    let decoded_java = env.new_short_array(result_length)
         .err_into_opus_exception("Failed to create java short array".into())?;
 
-    env.set_short_array_region(&decoded_java, 0, &decoded)
+    decoded_java.set_region(env, 0, &decoded)
         .err_into_opus_exception("Failed to copy short vec into java short array".into())?;
 
     Ok(decoded_java)

@@ -1,6 +1,7 @@
 use std::cmp::{max, min};
-use jni::JNIEnv;
 use jni::objects::{JByteArray, JClass, JObject, JShortArray, JValue};
+use jni::{jni_sig, jni_str, Env, EnvUnowned};
+use jni::errors::ThrowRuntimeExAndDefault;
 use jni::sys::{jboolean, jint, jlong, jshort};
 use opus::{Application, Bitrate, Channels, Encoder};
 use crate::encoder_container::EncoderContainer;
@@ -9,94 +10,63 @@ use crate::util::into_exception::ErrIntoException;
 use crate::util::pointer::{get_pointer_from_field, JavaPointers};
 
 #[no_mangle]
-pub extern "system" fn Java_com_plasmoverse_opus_OpusEncoder_createNative(
-    mut env: JNIEnv,
-    _class: JClass,
+pub extern "system" fn Java_com_plasmoverse_opus_OpusEncoder_createNative<'local>(
+    mut env: EnvUnowned<'local>,
+    _class: JClass<'local>,
     sample_rate: jint,
     stereo: jboolean,
     opus_mode: jint,
     mtu_size: jint
 ) -> jlong {
-    match create_encoder(sample_rate, stereo, opus_mode, mtu_size) {
-        Ok(pointer) => pointer,
-        Err(exception) => {
-            env.throw_new_exception(exception);
-            0
-        }
-    }
+    env.with_env(|env| create_encoder(sample_rate, stereo, opus_mode, mtu_size).or_throw(env))
+        .resolve::<ThrowRuntimeExAndDefault>()
 }
 
 #[no_mangle]
-pub unsafe extern "system" fn Java_com_plasmoverse_opus_OpusEncoder_resetNative(
-    mut env: JNIEnv,
-    encoder: JObject
+pub extern "system" fn Java_com_plasmoverse_opus_OpusEncoder_resetNative<'local>(
+    mut env: EnvUnowned<'local>,
+    encoder: JObject<'local>
 ) {
-    match encoder_reset(&mut env, encoder) {
-        Ok(pointer) => pointer,
-        Err(exception) => {
-            env.throw_new_exception(exception);
-        }
-    }
+    env.with_env(|env| encoder_reset(env, encoder).or_throw(env))
+        .resolve::<ThrowRuntimeExAndDefault>()
 }
 
 #[no_mangle]
-pub unsafe extern "system" fn Java_com_plasmoverse_opus_OpusEncoder_closeNative(
-    mut env: JNIEnv,
-    encoder: JObject
+pub extern "system" fn Java_com_plasmoverse_opus_OpusEncoder_closeNative<'local>(
+    mut env: EnvUnowned<'local>,
+    encoder: JObject<'local>
 ) {
-    match encoder_close(&mut env, encoder) {
-        Ok(pointer) => pointer,
-        Err(exception) => {
-            env.throw_new_exception(exception);
-        }
-    }
+    env.with_env(|env| encoder_close(env, encoder).or_throw(env))
+        .resolve::<ThrowRuntimeExAndDefault>()
 }
 
 #[no_mangle]
-pub unsafe extern "system" fn Java_com_plasmoverse_opus_OpusEncoder_encodeNative<'local>(
-    mut env: JNIEnv<'local>,
+pub extern "system" fn Java_com_plasmoverse_opus_OpusEncoder_encodeNative<'local>(
+    mut env: EnvUnowned<'local>,
     encoder: JObject<'local>,
     samples: JShortArray<'local>
 ) -> JByteArray<'local> {
-    match encoder_encode(&mut env, encoder, samples) {
-        Ok(decoded) => decoded,
-        Err(exception) => {
-            let result = env.new_byte_array(0)
-                .expect("Couldn't create java byte array");
-
-            env.throw_new_exception(exception);
-
-            result
-        }
-    }
+    env.with_env(|env| encoder_encode(env, encoder, samples).or_throw(env))
+        .resolve::<ThrowRuntimeExAndDefault>()
 }
 
 #[no_mangle]
-pub unsafe extern "system" fn Java_com_plasmoverse_opus_OpusEncoder_setBitrateNative(
-    mut env: JNIEnv,
-    encoder: JObject,
+pub extern "system" fn Java_com_plasmoverse_opus_OpusEncoder_setBitrateNative<'local>(
+    mut env: EnvUnowned<'local>,
+    encoder: JObject<'local>,
     bitrate: jint
 ) {
-    match encoder_set_bitrate(&mut env, encoder, bitrate) {
-        Ok(decoded) => decoded,
-        Err(exception) => {
-            env.throw_new_exception(exception);
-        }
-    }
+    env.with_env(|env| encoder_set_bitrate(env, encoder, bitrate).or_throw(env))
+        .resolve::<ThrowRuntimeExAndDefault>()
 }
 
 #[no_mangle]
-pub unsafe extern "system" fn Java_com_plasmoverse_opus_OpusEncoder_getBitrateNative(
-    mut env: JNIEnv,
-    encoder: JObject,
+pub extern "system" fn Java_com_plasmoverse_opus_OpusEncoder_getBitrateNative<'local>(
+    mut env: EnvUnowned<'local>,
+    encoder: JObject<'local>,
 ) -> jint {
-    match encoder_get_bitrate(&mut env, encoder) {
-        Ok(decoded) => decoded,
-        Err(exception) => {
-            env.throw_new_exception(exception);
-            0
-        }
-    }
+    env.with_env(|env| encoder_get_bitrate(env, encoder).or_throw(env))
+        .resolve::<ThrowRuntimeExAndDefault>()
 }
 
 
@@ -106,10 +76,7 @@ fn create_encoder(
     opus_mode: jint,
     mtu_size: jint
 ) -> Result<jlong, JavaException> {
-    let channels = match stereo {
-        1u8 => Channels::Stereo,
-        _ => Channels::Mono
-    };
+    let channels = if stereo { Channels::Stereo } else { Channels::Mono };
 
     let mode = match opus_mode {
         2049 => Application::Audio,
@@ -129,18 +96,18 @@ fn create_encoder(
     Ok(encoder_container.into_jlong_pointer())
 }
 
-unsafe fn get_encoder_container<'local>(
-    env: &mut JNIEnv,
+fn get_encoder_container<'a>(
+    env: &mut Env,
     encoder: &JObject
-) -> Result<&'local mut EncoderContainer, JavaException> {
-    let pointer = get_pointer_from_field(env, encoder, "pointer".into())
+) -> Result<&'a mut EncoderContainer, JavaException> {
+    let pointer = get_pointer_from_field(env, encoder)
         .err_into_opus_exception("Failed to get a pointer from the java object".into())?;
 
-    Ok(EncoderContainer::from_jlong_pointer(pointer))
+    Ok(unsafe { EncoderContainer::from_jlong_pointer(pointer) })
 }
 
-unsafe fn encoder_reset(
-    env: &mut JNIEnv,
+fn encoder_reset(
+    env: &mut Env,
     encoder: JObject
 ) -> Result<(), JavaException> {
     let container = get_encoder_container(env, &encoder)?;
@@ -151,34 +118,33 @@ unsafe fn encoder_reset(
     Ok(())
 }
 
-unsafe fn encoder_close(
-    env: &mut JNIEnv,
+fn encoder_close(
+    env: &mut Env,
     encoder: JObject
 ) -> Result<(), JavaException> {
-    let pointer = get_pointer_from_field(env, &encoder, "pointer".into())
+    let pointer = get_pointer_from_field(env, &encoder)
         .err_into_opus_exception("Failed to get a pointer from the java object".into())?;
 
-    let _container = Box::from_raw(pointer as *mut EncoderContainer);
-    env.set_field(&encoder, "pointer", "J", JValue::from(0 as jlong))
+    let _container = unsafe { Box::from_raw(pointer as *mut EncoderContainer) };
+    env.set_field(&encoder, jni_str!("pointer"), jni_sig!("J"), JValue::from(0 as jlong))
         .err_into_opus_exception("Failed to reset pointer".into())?;
 
     Ok(())
 }
 
-unsafe fn encoder_encode<'local>(
-    env: &mut JNIEnv<'local>,
+fn encoder_encode<'local>(
+    env: &mut Env<'local>,
     encoder: JObject<'local>,
     samples: JShortArray<'local>
 ) -> Result<JByteArray<'local>, JavaException> {
     let container = get_encoder_container(env, &encoder)?;
 
-    let samples_length = env.get_array_length(&samples)
-        .err_into_opus_exception("Failed to get samples array length".into())?
-        as usize;
+    let samples_length = samples.len(env)
+        .err_into_opus_exception("Failed to get samples array length".into())?;
 
     let mut samples_vec = vec![0i16 as jshort; samples_length];
 
-    env.get_short_array_region(samples, 0, &mut samples_vec)
+    samples.get_region(env, 0, &mut samples_vec)
         .err_into_opus_exception("Failed to copy samples to rust vec".into())?;
 
     let result = container.encoder.encode_vec(&samples_vec, container.mtu_size as usize)
@@ -190,8 +156,8 @@ unsafe fn encoder_encode<'local>(
     Ok(encoded_java)
 }
 
-unsafe fn encoder_set_bitrate(
-    env: &mut JNIEnv,
+fn encoder_set_bitrate(
+    env: &mut Env,
     encoder: JObject,
     bitrate: jint
 ) -> Result<(), JavaException> {
@@ -211,8 +177,8 @@ unsafe fn encoder_set_bitrate(
     Ok(())
 }
 
-unsafe fn encoder_get_bitrate(
-    env: &mut JNIEnv,
+fn encoder_get_bitrate(
+    env: &mut Env,
     encoder: JObject
 ) -> Result<jint, JavaException> {
     let container = get_encoder_container(env, &encoder)?;
