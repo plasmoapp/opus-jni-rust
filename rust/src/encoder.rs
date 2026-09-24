@@ -15,8 +15,8 @@ pub extern "system" fn Java_com_plasmoverse_opus_OpusEncoder_createNative<'local
     _class: JClass<'local>,
     sample_rate: jint,
     stereo: jboolean,
-    opus_mode: jint,
-    mtu_size: jint
+    mtu_size: jint,
+    opus_mode: jint
 ) -> jlong {
     env.with_env(|env| create_encoder(sample_rate, stereo, opus_mode, mtu_size).or_throw(env))
         .resolve::<ThrowRuntimeExAndDefault>()
